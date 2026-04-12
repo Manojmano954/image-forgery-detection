@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ForgeGuard — Image Forgery Detection</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #0b0c10;
+      --surface:   #12141a;
+      --border:    #1f2230;
+      --accent:    #00e5ff;
+      --danger:    #ff3f5b;
+      --safe:      #00e5a0;
+      --text:      #e8eaf0;
+      --muted:     #5a5f7a;
+      --font-head: 'Syne', sans-serif;
+      --font-mono: 'DM Mono', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+    }
+
+    /* ── Noise grain overlay ─────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+      opacity: 0.03;
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Grid lines background ───────────────────────────────────── */
+    body::after {
+      content: '';
+      position: fixed; inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ──────────────────────────────────────────────────── */
+    .page {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 24px 80px;
+    }
+
+    /* ── Header ──────────────────────────────────────────────────── */
+    header {
+      text-align: center;
+      margin-bottom: 56px;
+    }
+
+    .logo-tag {
+      display: inline-block;
+      font-size: 11px;
+      letter-spacing: 4px;
+      text-transform: uppercase;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      padding: 4px 12px;
+      margin-bottom: 20px;
+      opacity: 0;
+      animation: fadeUp 0.6s 0.1s forwards;
+    }
+
+    h1 {
+      font-family: var(--font-head);
+      font-size: clamp(2.2rem, 5vw, 3.8rem);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -1px;
+      opacity: 0;
+      animation: fadeUp 0.6s 0.25s forwards;
+    }
+
+    h1 span {
+      color: var(--accent);
+    }
+
+    .subtitle {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      letter-spacing: 1px;
+      opacity: 0;
+      animation: fadeUp 0.6s 0.4s forwards;
+    }
+
+    /* ── Card ────────────────────────────────────────────────────── */
+    .card {
+      width: 100%;
+      max-width: 680px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 40px;
+      opacity: 0;
+      animation: fadeUp 0.6s 0.55s forwards;
+    }
+
+    /* ── Drop Zone ───────────────────────────────────────────────── */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      padding: 48px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    #drop-zone:hover,
+    #drop-zone.dragover {
+      border-color: var(--accent);
+      background: rgba(0,229,255,0.04);
+    }
+
+    #drop-zone input[type="file"] {
+      position: absolute; inset: 0;
+      opacity: 0; cursor: pointer;
+      width: 100%; height: 100%;
+    }
+
+    .drop-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+    }
+
+    .drop-label {
+      font-family: var(--font-head);
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .drop-sub {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+    }
+
+    /* ── Preview ─────────────────────────────────────────────────── */
+    #preview-wrap {
+      display: none;
+      margin-top: 28px;
+      position: relative;
+    }
+
+    #preview-wrap img {
+      width: 100%;
+      max-height: 320px;
+      object-fit: contain;
+      border: 1px solid var(--border);
+      display: block;
+    }
+
+    .preview-label {
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* ── Analyse Button ──────────────────────────────────────────── */
+    #analyse-btn {
+      display: none;
+      margin-top: 24px;
+      width: 100%;
+      padding: 16px;
+      background: var(--accent);
+      color: var(--bg);
+      font-family: var(--font-head);
+      font-size: 1rem;
+      font-weight: 800;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+
+    #analyse-btn:hover:not(:disabled) {
+      opacity: 0.85;
+      transform: translateY(-1px);
+    }
+
+    #analyse-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* ── Loading bar ─────────────────────────────────────────────── */
+    #loader {
+      display: none;
+      margin-top: 24px;
+      height: 3px;
+      background: var(--border);
+      overflow: hidden;
+    }
+
+    #loader.active { display: block; }
+
+    #loader::after {
+      content: '';
+      display: block;
+      height: 100%;
+      width: 40%;
+      background: var(--accent);
+      animation: slide 1s infinite ease-in-out;
+    }
+
+    /* ── Result Panel ────────────────────────────────────────────── */
+    #result-panel {
+      display: none;
+      margin-top: 28px;
+      border: 1px solid var(--border);
+      padding: 28px;
+      animation: fadeUp 0.4s forwards;
+    }
+
+    #result-panel.forged {
+      border-color: var(--danger);
+      background: rgba(255,63,91,0.05);
+    }
+
+    #result-panel.authentic {
+      border-color: var(--safe);
+      background: rgba(0,229,160,0.05);
+    }
+
+    .result-verdict {
+      font-family: var(--font-head);
+      font-size: 2rem;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .result-verdict.forged-text  { color: var(--danger); }
+    .result-verdict.safe-text    { color: var(--safe); }
+
+    .result-confidence {
+      font-size: 12px;
+      letter-spacing: 2px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    /* ── Probability bars ────────────────────────────────────────── */
+    .prob-section { }
+    .prob-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .prob-track {
+      height: 6px;
+      background: var(--border);
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+
+    .prob-fill {
+      height: 100%;
+      width: 0%;
+      transition: width 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .prob-fill.authentic-fill { background: var(--safe); }
+    .prob-fill.forged-fill    { background: var(--danger); }
+
+    /* ── Reset link ──────────────────────────────────────────────── */
+    #reset-btn {
+      display: none;
+      margin-top: 20px;
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 10px 20px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    #reset-btn:hover {
+      color: var(--text);
+      border-color: var(--text);
+    }
+
+    /* ── Footer ──────────────────────────────────────────────────── */
+    footer {
+      margin-top: 56px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-align: center;
+    }
+
+    /* ── Animations ──────────────────────────────────────────────── */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(18px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes slide {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    /* ── Error ───────────────────────────────────────────────────── */
+    #error-msg {
+      display: none;
+      margin-top: 16px;
+      font-size: 12px;
+      color: var(--danger);
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <header>
+    <div class="logo-tag">AI Forensics</div>
+    <h1>Forge<span>Guard</span></h1>
+    <p class="subtitle">Image Forgery Detection — MobileNetV2 + SVM Fusion</p>
+  </header>
+
+  <!-- Main Card -->
+  <div class="card">
+
+    <!-- Drop Zone -->
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept="image/*" />
+      <div class="drop-icon">🔍</div>
+      <div class="drop-label">Drop an image here</div>
+      <div class="drop-sub">or click to browse · JPG, PNG, BMP</div>
+    </div>
+
+    <!-- Preview -->
+    <div id="preview-wrap">
+      <p class="preview-label">Selected Image</p>
+      <img id="preview-img" src="" alt="Preview" />
+    </div>
+
+    <!-- Analyse Button -->
+    <button id="analyse-btn">Analyse Image</button>
+
+    <!-- Loader -->
+    <div id="loader"></div>
+
+    <!-- Error -->
+    <p id="error-msg"></p>
+
+    <!-- Result Panel -->
+    <div id="result-panel">
+      <div class="result-verdict" id="verdict-text"></div>
+      <div class="result-confidence" id="confidence-text"></div>
+
+      <div class="prob-section">
+        <div class="prob-label"><span>Authentic</span><span id="pct-auth">0%</span></div>
+        <div class="prob-track"><div class="prob-fill authentic-fill" id="bar-auth"></div></div>
+
+        <div class="prob-label"><span>Tampered</span><span id="pct-tamp">0%</span></div>
+        <div class="prob-track"><div class="prob-fill forged-fill" id="bar-tamp"></div></div>
+      </div>
+    </div>
+
+    <!-- Reset -->
+    <button id="reset-btn">↩ Analyse Another Image</button>
+
+  </div>
+
+  <footer>ForgeGuard · Powered by MobileNetV2 Feature Extraction + RBF‑SVM</footer>
+</div>
+
+<script>
+  const dropZone    = document.getElementById('drop-zone');
+  const fileInput   = document.getElementById('file-input');
+  const previewWrap = document.getElementById('preview-wrap');
+  const previewImg  = document.getElementById('preview-img');
+  const analyseBtn  = document.getElementById('analyse-btn');
+  const loader      = document.getElementById('loader');
+  const resultPanel = document.getElementById('result-panel');
+  const verdictText = document.getElementById('verdict-text');
+  const confText    = document.getElementById('confidence-text');
+  const barAuth     = document.getElementById('bar-auth');
+  const barTamp     = document.getElementById('bar-tamp');
+  const pctAuth     = document.getElementById('pct-auth');
+  const pctTamp     = document.getElementById('pct-tamp');
+  const resetBtn    = document.getElementById('reset-btn');
+  const errorMsg    = document.getElementById('error-msg');
+
+  let selectedFile = null;
+
+  // ── Drag & drop ──────────────────────────────────────────────────
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+
+  fileInput.addEventListener('change', () => {
+    if (fileInput.files.length) handleFile(fileInput.files[0]);
+  });
+
+  function handleFile(file) {
+    if (!file.type.startsWith('image/')) {
+      showError('Please upload an image file (JPG, PNG, BMP).');
+      return;
+    }
+    selectedFile = file;
+    const reader = new FileReader();
+    reader.onload = e => {
+      previewImg.src = e.target.result;
+      previewWrap.style.display = 'block';
+      analyseBtn.style.display  = 'block';
+      resultPanel.style.display = 'none';
+      resetBtn.style.display    = 'none';
+      errorMsg.style.display    = 'none';
+      resultPanel.className     = '';
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // ── Analyse ───────────────────────────────────────────────────────
+  analyseBtn.addEventListener('click', async () => {
+    if (!selectedFile) return;
+
+    analyseBtn.disabled = true;
+    loader.classList.add('active');
+    resultPanel.style.display = 'none';
+    errorMsg.style.display    = 'none';
+
+    const formData = new FormData();
+    formData.append('image', selectedFile);
+
+    try {
+      const res  = await fetch('/predict', { method: 'POST', body: formData });
+      const data = await res.json();
+
+      if (data.error) { showError(data.error); return; }
+
+      showResult(data);
+    } catch (err) {
+      showError('Server error. Make sure app.py is running on port 5000.');
+    } finally {
+      analyseBtn.disabled = false;
+      loader.classList.remove('active');
+    }
+  });
+
+  function showResult(data) {
+    resultPanel.style.display = 'block';
+    resetBtn.style.display    = 'block';
+
+    const forged = data.is_forged;
+    resultPanel.className = forged ? 'forged' : 'authentic';
+
+    verdictText.textContent  = forged ? '⚠ Tampered Image' : '✓ Authentic Image';
+    verdictText.className    = 'result-verdict ' + (forged ? 'forged-text' : 'safe-text');
+    confText.textContent     = `Confidence: ${data.confidence}%`;
+
+    const pAuth = data.probabilities.Original;
+    const pTamp = data.probabilities.Tamper;
+
+    pctAuth.textContent = pAuth + '%';
+    pctTamp.textContent = pTamp + '%';
+
+    // Trigger bar animation after a tiny delay
+    setTimeout(() => {
+      barAuth.style.width = pAuth + '%';
+      barTamp.style.width = pTamp + '%';
+    }, 80);
+  }
+
+  function showError(msg) {
+    loader.classList.remove('active');
+    errorMsg.textContent   = '⚠ ' + msg;
+    errorMsg.style.display = 'block';
+    analyseBtn.disabled    = false;
+  }
+
+  // ── Reset ─────────────────────────────────────────────────────────
+  resetBtn.addEventListener('click', () => {
+    selectedFile              = null;
+    fileInput.value           = '';
+    previewWrap.style.display = 'none';
+    previewImg.src            = '';
+    analyseBtn.style.display  = 'none';
+    resultPanel.style.display = 'none';
+    resetBtn.style.display    = 'none';
+    errorMsg.style.display    = 'none';
+    barAuth.style.width       = '0%';
+    barTamp.style.width       = '0%';
+    resultPanel.className     = '';
+  });
+</script>
+</body>
+</html>
